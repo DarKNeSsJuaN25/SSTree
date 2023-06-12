@@ -4,111 +4,130 @@ import pickle
 import os
 from queue import PriorityQueue
 class SSnode:
-    # Inicializa un nodo de SS-Tree
     def __init__(self, leaf=False, points=None, children=None, data=None, parent=None):
-        self.leaf     = leaf
-        self.points   = points if points is not None else []
+        self.leaf = leaf
+        self.points = points if points is not None else []
         self.children = children if children is not None else []
-        self.data     = data if data is not None else [] 
-        self.centroid = np.mean([p for p in self.points], axis=0) if self.points else None
-        self.radius   = self.compute_radius()
-        self.parent   = parent
+        self.data = data if data is not None else [] 
+        self.centroid = self.compute_centroid()
+        self.radius = self.compute_radius()
+        self.parent = parent
 
-    # Calcula el radio del nodo como la máxima distancia entre el centroide y los puntos contenidos en el nodo
     def compute_radius(self):
-        if self.leaf:
-            if not self.points:
-                return 0
-            return max([distance.euclidean(i,self.centroid) for i in self.points])
+        if self.points is None or self.centroid is None:
+            return 0
+        elif self.leaf:
+            return max([distance.euclidean(i.flatten(), self.centroid.flatten()) for i in self.points])
         else:
             if not self.children:
                 return 0
-            return max([distance.euclidean(i.centroid,self.centroid)+i.radius for i in self.children])
+            return max([distance.euclidean(i.centroid.flatten(), self.centroid.flatten()) + i.radius for i in self.children])
 
-    # Verifica si un punto dado está dentro del radio del nodo
-    def intersects_point(self, point):
-        return self.radius > distance.euclidean(point,self.centroid) 
-
-    # Actualiza el envolvente delimitador del nodo recalculando el centroide y el radio
-    def update_bounding_envelope(self):
-        #Para nodo interno: Promedio del centroide de los hijos
-        #Para hojas: Promedio de los hijos
-        #Llamar a recarcular radio
+    def compute_centroid(self):
         if self.leaf:
-            self.centroid = np.mean([point for point in self.points])
+            if self.points == None or len(self.points) == 0:
+                return None
+            return np.mean([point for point in self.points],axis=0)
         else:
-            self.centroid = np.mean([i.centroid for i in self.children])
-        self.compute_radius()
+            return np.mean([i.centroid for i in self.children],axis=0)
 
-    # Encuentra y devuelve el hijo más cercano al punto objetivo
-    # Se usa para entrar el nodo correto para insertar un nuevo punto
+    def intersects_point(self, point):
+        return self.radius > distance.euclidean(point.flatten(), self.centroid.flatten())
+
+    
+    def update_bounding_envelope(self):
+        self.centroid = self.compute_centroid()
+        self.radius = self.compute_radius()
+
     def find_closest_child(self, target):
-        return min(self.children, key=lambda x: distance.euclidean(x.centroid, target))
-    # Divide el nodo en dos a lo largo del eje de máxima varianza
-    # m
+        return min(self.children, key=lambda x: distance.euclidean(x.centroid.flatten(), target.flatten()) if x.centroid is not None else float('inf'))
+
     def split(self, m):
-        eje = self.direction_of_max_variance()
-        values = [point[eje] for point in self.points]
-        values.sort()
+        if self.leaf:
+            max_variance_index = self.direction_of_max_variance()
+            values = np.array([point[max_variance_index] for point in self.points])
+            values.sort()
 
-        split_index = self.find_split_index(m)
-        values_left = values[:split_index]
-        values_right = values[split_index:]
+            best_split_index = None
+            best_variance_reduction = float('inf')
 
-        newNode1 = SSnode(points=[i for i in self.points if i[eje] in values_left])
-        newNode2 = SSnode(points=[i for i in self.points if i[eje] in values_right])
+            for i in range(m, len(values) - m + 1):
+                values_left = values[:i]
+                values_right = values[i:]
 
-        return newNode1, newNode2
+                variance_reduction = self.min_variance_split(values_left, values_right)
 
-    # Encuentra el índice en el que dividir el nodo para minimizar la varianza total
-    def find_split_index(self,m):
-        num_points = len(self.points)
-        num_splits = num_points - 2 * m + 1
+                if variance_reduction < best_variance_reduction:
+                    best_variance_reduction = variance_reduction
+                    best_split_index = i
+            points_left = self.points[:best_split_index]
+            points_right = self.points[best_split_index:]
+            newNode1 = SSnode(points=points_left, leaf=True)
+            newNode2 = SSnode(points=points_right, leaf=True)
+            data = []
+            for i in range(len(newNode1.points)):
+                if np.array_equal(self.points[i], newNode1.points[i]):
+                    data.append(self.data[i])
+            data = []
+            for i in range(len(newNode1.points)):
+                if np.array_equal(self.points[i], newNode2.points[i]):
+                    data.append(self.data[i])
+            newNode1.data = data    
+            newNode2.data = data
+            return newNode1, newNode2
+        else:
+            max_variance_index = self.direction_of_max_variance()
+            values = np.array([child.centroid[max_variance_index] for child in self.children])
+            values.sort()
+            
+            best_split_index = None
+            best_variance_reduction = float('inf')
 
-        best_split_index = None
-        best_variance_reduction = float('inf')
+            for i in range(m, len(values) - m + 1):
+                values_left = values[:i]
+                values_right = values[i:]
 
-        for i in range(num_splits):
-            values_subset = self.points[i : i + 2 * m]
-            variance_reduction = self.min_variance_split(values_subset, m)
+                variance_reduction = self.min_variance_split(values_left, values_right)
 
-            if variance_reduction < best_variance_reduction:
-                best_variance_reduction = variance_reduction
-                best_split_index = i + m
+                if variance_reduction < best_variance_reduction:
+                    best_variance_reduction = variance_reduction
+                    best_split_index = i
 
-        return best_split_index
+            children_left = self.children[:best_split_index]
+            children_right = self.children[best_split_index:]
 
-    # Encuentra la división que minimiza la varianza total
-    def min_variance_split(self, values, m):
-        total_variance = np.var(values)
-        left_variances = [np.var(values[: i + 1]) for i in range(m - 1)]
-        right_variances = [np.var(values[i + 1 :]) for i in range(m - 1)]
+            newNode1 = SSnode(children=children_left)
+            newNode2 = SSnode(children=children_right)
 
-        variances_sum = [left_variances[i] + right_variances[m - i - 2] for i in range(m - 1)]
-        best_split_index = np.argmin(variances_sum)
+            return newNode1, newNode2
 
-        variance_reduction = total_variance - variances_sum[best_split_index]
-        return variance_reduction
+    def min_variance_split(self, values_left, values_right):
+        left_variance = np.var(values_left)
+        right_variance = np.var(values_right)
 
-    # Encuentra el eje a lo largo del cual los puntos tienen la máxima varianza
+        total_variance = (len(values_left) * left_variance + len(values_right) * right_variance) / (len(values_left) + len(values_right))
+
+        return total_variance
+
     def direction_of_max_variance(self):
-        # Calculate the variances along each dimension
-        variances = np.var(self.points, axis=0)
-        
-
+        if self.leaf:
+            variances = np.var(self.points, axis=0)
+        else:
+            variances = np.var([i.centroid for i in self.children] , axis=0)
         max_variance_index = np.argmax(variances)
-        
         return max_variance_index
 
-    # Obtiene los centroides de las entradas del nodo
     def get_entries_centroids(self):
-        # Completar aqui!
-        return [np.mean(c,axis=0) for c in self.points]
-        
-        
+        return [np.mean(c, axis=0) for c in self.points]
+    
+    def printNode(self, indent=0):
+        print('\t' * indent, f'Centroid: {self.centroid}, Radius: {self.radius}')
+        for child in self.children:
+            child.printNode(indent + 2)
+
+
 
 class SSTree:
-    # Inicializa un SS-Tree
     def __init__(self, M=None, m=None, filename=None):
         if filename is None:
             self.M = M
@@ -124,45 +143,55 @@ class SSTree:
                 self.m = loaded_tree.m
                 self.root = loaded_tree.root
             else:
-                print(f"'{filename}' no existe.")
+                print(f"'{filename}' does not exist.")
                 self.M = None
                 self.m = None
                 self.root = None
 
-    # Inserta un punto en el árbol
+
     def insert(self, point, data=None):
         if self.root is None:
-            self.root = SSnode(leaf=True,points=[point],data=[data])
+            self.root = SSnode(leaf=True, points=[point], data=[data])
         else:
-            self._insert(self.root,point,data)
-
-    def _insert(self, node, point, data):
-        if node.leaf:
+            node = self._choose_leaf(self.root, point)
+            if tuple(point) in [tuple(p) for p in node.points]:
+                return
             node.points.append(point)
             node.data.append(data)
-            if len(node.points) > self.M:
-                newNode1, newNode2 = node.split(self.m)
-                if node.parent is None:
-                    self.root = SSnode(children=[newNode1, newNode2], parent=None)
-                    newNode1.parent = self.root
-                    newNode2.parent = self.root
-                else:
-                    parent = node.parent
-                    parent.children.remove(node)
-                    parent.children.extend([newNode1, newNode2])
-                    newNode1.parent = parent
-                    newNode2.parent = parent
-                    if len(parent.children) > self.M:
-                        self._split(parent)
-        else:
-            closest_child = node.find_closest_child(point)
-            self._insert(closest_child, point, data)        
+            node.update_bounding_envelope()
+            self.update_node(node)
 
-    # Busca un punto en el árbol y devuelve el nodo que lo contiene si existe
+        return self.root
+    
+
+    def update_node(self,node):
+        if (node.leaf and len(node.points) > self.M) or (node.leaf == False and len(node.children) > self.M):
+            if node.parent is None:
+                new_node1, new_node2 = node.split(self.m)
+                self.root = SSnode(children=[new_node1, new_node2])
+                new_node1.parent = self.root
+                new_node2.parent = self.root
+            else:
+                new_node1, new_node2 = node.split(self.m)
+                node.parent.children.remove(node)
+                node.parent.children.extend([new_node1, new_node2])
+                new_node1.parent = node.parent
+                new_node2.parent = node.parent
+                node.parent.update_bounding_envelope()
+                self.update_node(node.parent)
+
+
+    def _choose_leaf(self, node, point):
+        if node.leaf:
+            return node
+        while node.leaf is False:
+            node = node.find_closest_child(point)
+    
+        return self._choose_leaf(node, point)
+
     def search(self, target):
         return self._search(self.root, target)
 
-    # Función recursiva de ayuda para buscar un punto en el árbol
     def _search(self, node, target):
         if node.leaf:
             return node if target in node.points else None
@@ -173,36 +202,48 @@ class SSTree:
                     if result is not None:
                         return result
         return None
-    
 
-
-    # Depth-First K-Nearest Neighbor Algorithm
     def knn(self, q, k=3):
-        pq = PriorityQueue()
-        self._knn(self.root, q, k, pq)
-        return [pq.get()[1] for _ in range(pq.qsize())][::-1]
+        L = PriorityQueue()
+        Dk = [float('inf')]
 
-    # Función recursiva de ayuda para el algoritmo KNN
-    def _knn(self, node, q, k, pq):
+        self.depth_first_search(q, k, self.root, L, Dk)
+        nearest_neighbors = []
+
+        while not L.empty():
+            _, data = L.get()
+            point = data['point']
+            path = data['path']
+            nearest_neighbors.append({'point': point, 'path': path})
+
+        return nearest_neighbors[::-1]
+
+    def depth_first_search(self, q, k, node, L, Dk):
         if node.leaf:
             for i, point in enumerate(node.points):
                 dist = distance.euclidean(point, q)
-                if pq.qsize() < k:
-                    pq.put((-dist, node.data[i]))
-                elif dist < -pq.queue[0][0]:
-                    pq.get()
-                    pq.put((-dist, node.data[i]))
+                if dist < Dk[0]:
+                    if L.qsize() == k:
+                        L.get()
+                    L.put((-dist, {'point': point, 'path': node.data[i]}))
+                    if L.qsize() == k:
+                        Dk[0] = -L.queue[0][0]
         else:
             for child in node.children:
                 if child.intersects_point(q):
-                    self._knn(child, q, k, pq)
-    # Guarda el árbol en un archivo
+                    self.depth_first_search(q, k, child, L, Dk)
+                    
     def save(self, filename):
         with open(filename, 'wb') as f:
             pickle.dump(self, f)
 
-    # Carga un árbol desde un archivo
     @staticmethod
     def load(filename):
         with open(filename, 'rb') as f:
             return pickle.load(f)
+            
+    def print(self):
+        if self.root is not None:
+            self.root.printNode()
+        else:
+            print("El árbol está vacío.")
